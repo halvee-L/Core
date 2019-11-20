@@ -8,44 +8,55 @@
     global.Promise = factory(global);
   }
 })(typeof window !== "undefined" ? window : this, function(global) {
-  var getType = v => Object.prototype.toString.call(v).slice(8, -1);
-  var isFunction = v => getType(v) === "Function";
-  var throwError = v => {
+  var getType = function(v) {
+    return Object.prototype.toString.call(v).slice(8, -1);
+  };
+  var isFunction = function(v) {
+    return getType(v) === "Function";
+  };
+  var throwError = function(v) {
     throw new TypeError(v);
   };
-  var nextTick =
-    typeof MutationObserver !== "undefined" && global.document
-      ? (function() {
-          var isPending = false;
-          var observerCallbackQueue = [];
-          var observer = new MutationObserver(function() {
-            var observerCallback;
 
-            while ((observerCallback = observerCallbackQueue.shift())) {
-              try {
-                observerCallback();
-              } catch (e) {
-                console.log(e);
-              }
-            }
-            isPending = false;
-          });
+  var microtasks =
+    typeof MutationObserver !== "undefined" && global.document
+      ? function(callback) {
+          var observer = new MutationObserver(callback);
           var div = document.createElement("div");
           observer.observe(div, { attributes: true });
-          return function(callback) {
-            observerCallbackQueue.push(callback);
-            if (!isPending) {
-              div.id = Date.now() + Math.random();
-              isPending = true;
-            }
-          };
-        })()
+          div.id = Date.now() + Math.random();
+        }
       : function(callback) {
           var timer = setTimeout(function() {
             callback();
             clearTimeout(timer);
-          }, 10);
+          }, 0);
         };
+
+  var nextTick = (function() {
+    var isPending = false;
+    var observerCallbackQueue = [];
+    function execTask() {
+      isPending = true;
+      microtasks(function() {
+        var observerCallback;
+        while ((observerCallback = observerCallbackQueue.shift())) {
+          try {
+            observerCallback();
+          } catch (e) {
+            console.log(e);
+          }
+        }
+        isPending = false;
+      });
+    }
+    return function(callback) {
+      observerCallbackQueue.push(callback);
+      if (!isPending) {
+        execTask();
+      }
+    };
+  })();
 
   var parseQueue = function parseQueue(queue, callback) {
     var _resolve, _reject;
@@ -61,12 +72,15 @@
         value.then(_resolve).catch(_reject);
       } else {
         this.PromiseStatus === "rejected" ? _reject(value) : _resolve(value);
+        //_resolve(value);
       }
     };
     queue.push(queueCall);
     return promise;
   };
 
+  var counter = 0;
+  window.testPromise = [];
   var Promise = function Promise(resolver) {
     if (!this instanceof Promise) {
       throwError("undefined is not a promise");
@@ -74,8 +88,10 @@
     if (!isFunction(resolver)) {
       throwError("Promise resolver #<Object> is not a function");
     }
+    testPromise.push(this);
     var _PromiseStatus = "pending";
     var _PromiseValue = null;
+    this.id = counter++;
     Object.defineProperties(this, {
       PromiseStatus: {
         get: function() {
