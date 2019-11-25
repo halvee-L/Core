@@ -190,6 +190,13 @@
       }
     });
   };
-
+  Promise.race = function(promises) {
+    return new Promise(function(resolve, reject) {
+      var length = promises.length;
+      for (var i = 0, len = length; i < len; i++) {
+        promises[i].then(resolve).catch(reject);
+      }
+    });
+  };
   return Promise;
 });
