@@ -80,7 +80,6 @@
   };
 
   var counter = 0;
-  window.testPromise = [];
   var Promise = function Promise(resolver) {
     if (!this instanceof Promise) {
       throwError("undefined is not a promise");
@@ -88,7 +87,6 @@
     if (!isFunction(resolver)) {
       throwError("Promise resolver #<Object> is not a function");
     }
-    testPromise.push(this);
     var _PromiseStatus = "pending";
     var _PromiseValue = null;
     this.id = counter++;
@@ -143,11 +141,13 @@
 
     resolver(
       function resolve(value) {
+        if (_PromiseStatus !== "pending") return;
         _PromiseValue = value;
         _PromiseStatus = "resolved";
         nextTick(execQueue);
       },
       function reject(value) {
+        if (_PromiseStatus !== "pending") return;
         _PromiseValue = value;
         _PromiseStatus = "rejected";
         nextTick(execQueue);
@@ -165,7 +165,31 @@
       reject(value);
     });
   };
-  Promise.all = function() {};
+  Promise.all = function(promises) {
+    return new Promise(function(resolve, reject) {
+      var result = [];
+      var length = promises.length;
+      var isFill = function() {
+        for (var i = 0; i < length; i++) {
+          if (!(i in result)) {
+            return false;
+          }
+        }
+        return true;
+      };
+      var thenCall = function(index) {
+        return function(data) {
+          result[index] = data;
+          if (isFill()) {
+            resolve(result);
+          }
+        };
+      };
+      for (var i = 0, len = length; i < len; i++) {
+        promises[i].then(thenCall(i)).catch(reject);
+      }
+    });
+  };
 
   return Promise;
 });
