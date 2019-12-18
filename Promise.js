@@ -18,6 +18,14 @@
     throw new TypeError(v);
   };
 
+  if (!isFunction(Function.prototype.bind)) {
+    Function.prototype.bind = function(context) {
+      var fn = this;
+      return function bindCall() {
+        fn.apply(context || this, arguments);
+      };
+    };
+  }
   var microtasks =
     typeof MutationObserver !== "undefined" && global.document
       ? function(callback) {
@@ -69,7 +77,7 @@
         value = callback(value);
       }
       if (value instanceof Promise) {
-        value.then(_resolve).catch(_reject);
+        value.then(_resolve, _reject); //.catch(_reject);
       } else {
         this.PromiseStatus === "rejected" ? _reject(value) : _resolve(value);
         //_resolve(value);
@@ -79,6 +87,21 @@
     return promise;
   };
 
+  var ArrayFull = function(length) {
+    this.values = [];
+    this.length = length;
+  };
+  ArrayFull.prototype.isFull = function() {
+    for (var i = 0, len = this.length; i < len; i++) {
+      if (!(i in this.values)) {
+        return false;
+      }
+    }
+    return true;
+  };
+  ArrayFull.prototype.set = function(index, value) {
+    this.values[index] = value;
+  };
   var counter = 0;
   var Promise = function Promise(resolver) {
     if (!this instanceof Promise) {
@@ -123,80 +146,125 @@
       }
     }.bind(this);
 
-    this.then = function(callback) {
-      var promise = parseQueue(resolveQueue, callback);
-      nextTick(execQueue);
+    var callQueue = (function() {
+      var callin = false;
+      return function() {
+        if (callin) return;
+        callin = true;
+        nextTick(function() {
+          execQueue();
+          callin = false;
+        });
+      };
+    })();
+
+    this.then = function(onFulfilled, onRejected) {
+      var promises = [parseQueue(resolveQueue, onFulfilled)];
+      if (isFunction(onRejected)) {
+        var promiseReject = this.catch(onRejected);
+        promises.push(promiseReject);
+      }
+      callQueue();
+      return Promise.race(promises);
+    };
+    this.catch = function(onRejected) {
+      var promise = parseQueue(rejectQueue, onRejected);
+      callQueue();
       return promise;
     };
-    this.catch = function(callback) {
-      var promise = parseQueue(rejectQueue, callback);
-      nextTick(execQueue);
-      return promise;
-    };
-    this.finally = function(callback) {
-      var promise = parseQueue(finallyQueue, callback);
-      nextTick(execQueue);
+    this.finally = function(onFinally) {
+      var promise = parseQueue(finallyQueue, onFinally);
+      callQueue();
       return promise;
     };
 
-    resolver(
-      function resolve(value) {
+    function statusFactory(status) {
+      return function statusFunction(value) {
         if (_PromiseStatus !== "pending") return;
         _PromiseValue = value;
-        _PromiseStatus = "resolved";
+        _PromiseStatus = status;
         nextTick(execQueue);
-      },
-      function reject(value) {
-        if (_PromiseStatus !== "pending") return;
-        _PromiseValue = value;
-        _PromiseStatus = "rejected";
-        nextTick(execQueue);
-      }
-    );
+      };
+    }
+    var onRejecter = statusFactory("rejected");
+    var onResolver = statusFactory("resolved");
+    try {
+      resolver(onResolver, onRejecter);
+    } catch (e) {
+      onRejecter(e);
+    }
   };
 
   Promise.resolve = function(value) {
+    if (value instanceof Promise) return value;
     return new Promise(function(resolve, reject) {
       resolve(value);
     });
   };
   Promise.reject = function(value) {
     return new Promise(function(resolve, reject) {
-      reject(value);
+      if (value instanceof Promise) {
+        value.then(reject);
+      } else {
+        reject(value);
+      }
     });
   };
-  Promise.all = function(promises) {
-    return new Promise(function(resolve, reject) {
-      var result = [];
-      var length = promises.length;
-      var isFill = function() {
-        for (var i = 0; i < length; i++) {
-          if (!(i in result)) {
-            return false;
+
+  var PromiseAllFactory = function(caller) {
+    return function PromiseProxy(promises) {
+      return new Promise(function(resolve, reject) {
+        var length = promises.length;
+        var result = new ArrayFull(length);
+        var thenCall = function(index, status) {
+          return caller(
+            function(data) {
+              result.set(index, data);
+              if (result.isFull()) {
+                resolve(result.values);
+              }
+            },
+            reject,
+            status
+          );
+        };
+        for (var i = 0, len = length; i < len; i++) {
+          if (promises[i] && promises[i].then) {
+            promises[i].then(thenCall(i, "fulfilled"), thenCall(i, "rejected"));
+            // .catch(thenCall(i, "rejected"));
+          } else {
+            thenCall(i, "resolve")(promises[i]);
           }
         }
-        return true;
-      };
-      var thenCall = function(index) {
-        return function(data) {
-          result[index] = data;
-          if (isFill()) {
-            resolve(result);
-          }
-        };
-      };
-      for (var i = 0, len = length; i < len; i++) {
-        promises[i].then(thenCall(i)).catch(reject);
-      }
-    });
+      });
+    };
   };
+  Promise.all = PromiseAllFactory(function(proxy, reject, status) {
+    if (status === "rejected") return reject;
+    return function(data) {
+      proxy(data);
+    };
+  });
   Promise.race = function(promises) {
+    if (promises.length == 1) {
+      return promises[0];
+    }
     return new Promise(function(resolve, reject) {
       var length = promises.length;
       for (var i = 0, len = length; i < len; i++) {
-        promises[i].then(resolve).catch(reject);
+        promises[i].then(resolve, reject); //.catch();
       }
     });
   };
+  Promise.allSettled = PromiseAllFactory(function(proxy, reject, status) {
+    return function(data) {
+      var resultData = {
+        status: status
+      };
+      var key = status === "fulfilled" ? "value" : "reason";
+      resultData[key] = data;
+      proxy(resultData);
+    };
+  });
   return Promise;
 });
